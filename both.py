@@ -23,6 +23,7 @@ playerColor = (255, 0, 0)
 
 # global variables
 grid = np.full((GRID_SIZE, GRID_SIZE, 3), WHITE, dtype=int)
+gridLocks = np.full((GRID_SIZE, GRID_SIZE), None)
 
 
 
@@ -36,19 +37,33 @@ def broadcast(data):
             client.close()
             clients.remove(client)
 
+def processData(data):
+    global playerColor
+    data = json.loads(data)
+
+    if data["type"] == "setColor":
+        playerColor = tuple(data["color"])
+
+    elif data["type"] == "fill":
+        x, y = tuple(data["coords"])
+        print(f"received cell: {x}, {y}")
+        grid[y][x] = tuple(data["color"])
+
+    elif data["type"] == "lock":
+        x, y = tuple(data["coords"])
+        gridLocks[y][x] = 1
+
+    elif data["type"] == "unlock":
+        x, y = tuple(data["coords"])
+        gridLocks[y][x] = None
+
 def clientHandler(clientSocket):
     while True:
         try:
             receivedData = clientSocket.recv(1024).decode('utf-8')
             broadcast(receivedData)
 
-            # Parse JSON data
-            data = json.loads(receivedData)
-
-            # Convert list to tuple and extract x and y
-            x, y = tuple(data["coords"])
-            print(f"received cell: {x}, {y}")
-            grid[y][x] = data["color"]
+            processData(receivedData)
 
         except Exception as e:
             print(f"Error handling client {clientSocket}: {e}")
@@ -60,14 +75,7 @@ def clientUpdate():
     while True:
         try:
             receivedData = clientSocket.recv(1024).decode('utf-8')
-
-            # Parse JSON data
-            data = json.loads(receivedData)
-
-            # Convert list to tuple and extract x and y
-            x, y = tuple(data["coords"])
-            print(f"received cell: {x}, {y}")
-            grid[y][x] = data["color"]
+            processData(receivedData)
 
         except Exception as e:
             print(f"Error updating client: {e}")
@@ -103,7 +111,7 @@ if (isServer):
     while len(clients) < playerCount - 1:
         clientSocket, address = serverSocket.accept()
 
-        colorData = json.dumps(PLAYER_COLORS[len(clients)])
+        colorData = json.dumps({"type": "setColor", "color": PLAYER_COLORS[len(clients)]})
         clientSocket.send(colorData.encode("utf-8"))
 
         clients.append(clientSocket)
@@ -116,8 +124,10 @@ if (isServer):
 else:
     print("Waiting to be assigned color...")
     receivedData = clientSocket.recv(1024).decode('utf-8')
-    colorJson = json.loads(receivedData)
-    playerColor = tuple(colorJson)
+
+    processData(receivedData)
+    # jsonData = json.loads(receivedData)
+    # playerColor = tuple(jsonData["color"])
 
     print("Playing as color: ", playerColor)
 
@@ -146,9 +156,11 @@ while running:
             running = False
         elif event.type == pygame.MOUSEBUTTONDOWN:
             x, y = event.pos
-            grid_x, grid_y = x // CELL_SIZE, y // CELL_SIZE
-            currentCell = (grid_x, grid_y)
-            coloring = True
+            gridX, gridY = x // CELL_SIZE, y // CELL_SIZE
+            currentCell = (gridX, gridY)
+            
+            if gridLocks[gridY][gridX] == None:
+                coloring = True
         elif event.type == pygame.MOUSEBUTTONUP:
             coloring = False
             
@@ -164,12 +176,15 @@ while running:
                 grid[currentCell[1]][currentCell[0]] = playerColor
                 
                 cellCoords = (currentCell[0], currentCell[1])
-                jsonData = json.dumps({"color": playerColor, "coords": cellCoords})
+                jsonFillData = json.dumps({"type": "fill", "color": playerColor, "coords": cellCoords})
+                # jsonLockData = json.dumps({"type": "lock", "coords": cellCoords})
 
                 if (isServer):
-                    broadcast(jsonData)
+                    broadcast(jsonFillData)
+                    # broadcast(jsonLockData)
                 else:
-                    clientSocket.send(jsonData.encode('utf-8'))
+                    clientSocket.send(jsonFillData.encode('utf-8'))
+                    # clientSocket.send(jsonLockData.encode('utf-8'))
 
             # Clear the entire drawing surface
             drawingSurface.fill(WHITE)
