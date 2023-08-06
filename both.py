@@ -23,7 +23,7 @@ playerColor = (255, 0, 0)
 
 # global variables
 grid = np.full((GRID_SIZE, GRID_SIZE, 3), WHITE, dtype=int)
-gridLocks = np.full((GRID_SIZE, GRID_SIZE), None)
+gridLocks = np.full((GRID_SIZE, GRID_SIZE), None, dtype=object)
 
 
 
@@ -39,6 +39,7 @@ def broadcast(data):
 
 def processData(data):
     global playerColor
+    global gridLocks
     data = json.loads(data)
 
     if data["type"] == "setColor":
@@ -52,11 +53,7 @@ def processData(data):
 
     elif data["type"] == "lock":
         x, y = tuple(data["coords"])
-        gridLocks[y][x] = 1
-
-    elif data["type"] == "unlock":
-        x, y = tuple(data["coords"])
-        gridLocks[y][x] = None
+        gridLocks[y][x] = tuple(data["color"])
 
 def clientHandler(clientSocket):
     while True:
@@ -160,8 +157,21 @@ while running:
             gridX, gridY = x // CELL_SIZE, y // CELL_SIZE
             currentCell = (gridX, gridY)
             
-            if gridLocks[gridY][gridX] == None:
+            print("grid lock: ", gridLocks[gridY][gridX])
+            print("playerColor: ", playerColor)
+            if gridLocks[gridY][gridX] == None or gridLocks[gridY][gridX] == playerColor:
                 coloring = True
+                # Lock the cell with the current player's color
+                gridLocks[gridY][gridX] = playerColor
+                
+                # Notify other players about the lock
+                cellCoords = (gridX, gridY)
+                jsonLockData = json.dumps({"type": "lock", "color": playerColor, "coords": cellCoords})
+                if (isServer):
+                    broadcast(jsonLockData)
+                else:
+                    clientSocket.send(jsonLockData.encode('utf-8'))
+
         elif event.type == pygame.MOUSEBUTTONUP:
             coloring = False
             
@@ -186,6 +196,9 @@ while running:
                 else:
                     clientSocket.send(jsonFillData.encode('utf-8'))
                     # clientSocket.send(jsonLockData.encode('utf-8'))
+
+            elif gridLocks[currentCell[1]][currentCell[0]] != 1:
+                gridLocks[currentCell[1]][currentCell[0]] = None
 
             # Clear the entire drawing surface
             drawingSurface.fill(WHITE)
