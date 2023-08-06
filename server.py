@@ -16,7 +16,10 @@ def handle_client(client_socket, player_number):
     client_socket.close()
 
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server_socket.bind(('0.0.0.0', 12345))
+try:
+    server_socket.bind(('0.0.0.0', 12345))
+except:
+    print("address 12345 already in use")
 server_socket.listen()
 
 player_counter = 0
