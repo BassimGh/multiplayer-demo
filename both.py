@@ -48,6 +48,7 @@ def processData(data):
         x, y = tuple(data["coords"])
         print(f"received cell: {x}, {y}")
         grid[y][x] = tuple(data["color"])
+        gridLocks[y][x] = 1
 
     elif data["type"] == "lock":
         x, y = tuple(data["coords"])
