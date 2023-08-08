@@ -4,38 +4,64 @@ import pygame
 import numpy as np
 import json
 
-clients = []
+# Constants
+SERVER_IP = '172.29.179.39'
+PORT = 12345
 
-# define constants
 CELL_SIZE = 50
 GRID_SIZE = 8
 SCREEN_SIZE = GRID_SIZE * CELL_SIZE
-WHITE = (255, 255, 255)  # Unclaimed cells are white
-BLACK = (0, 0, 0)  # Cell border is black
-BORDER_SIZE = 2  # Size of the cell border
-BRUSH_SIZE = 5  # Size of the brush
 
-# These colors will be assigned to the clients that connect to the server
-PLAYER_COLORS = [(0, 0, 255), (0, 255, 0), (255, 255, 0), (0, 255, 255)]
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+RED = (255, 0, 0)
+GREEN = (0, 255, 0)
+BLUE = (0, 0, 255)
+YELLOW = (255, 255, 0)
+CYAN = (0, 255, 255)
+
+BORDER_SIZE = 2
+BRUSH_SIZE = 10
+
+# These colors will be assigned to the clients (players) that connect to the server
+PLAYER_COLORS = [BLUE, GREEN, YELLOW, CYAN]
 
 # server host will take the default red color
-playerColor = (255, 0, 0)
+playerColor = RED
 
 # global variables
+sockets = []
 grid = np.full((GRID_SIZE, GRID_SIZE, 3), WHITE, dtype=int)
 gridLocks = np.full((GRID_SIZE, GRID_SIZE), None, dtype=object)
 
+runThreads = True
+activeThreads = []
 
+def findWinner():
+    # all colors in PLAYER_COLOURS
+    colorCounts = {(255, 0, 0): 0, (0, 0, 255): 0, (0, 255, 0): 0, (255, 255, 0): 0, (0, 255, 255): 0}
+    for row in grid:
+        for color in row:
+            if tuple(color) in colorCounts:
+                colorCounts[tuple(color)] += 1
+
+    # Get the color with the most cells
+    winner_color = max(colorCounts, key=colorCounts.get)
+
+    if winner_color == playerColor:
+        print("You win!")
+    else:
+        print("You lose!")
 
 def broadcast(data):
-    for client in clients:
+    for client in sockets:
         try:
             client.send(data.encode('utf-8'))
         except:
             # If sending fails, client has disconnected
             print("BROADCAST FAILED")
             client.close()
-            clients.remove(client)
+            sockets.remove(client)
 
 def processData(data):
     global playerColor
@@ -55,46 +81,54 @@ def processData(data):
         x, y = tuple(data["coords"])
         gridLocks[y][x] = tuple(data["color"])
 
-def clientHandler(clientSocket):
-    while True:
-        try:
-            receivedData = clientSocket.recv(1024).decode('utf-8')
-            broadcast(receivedData)
 
+def clientHandler(clientSocket):
+    global runThreads
+    while runThreads:
+        try:
+            if clientSocket not in sockets:
+                break
+            
+            receivedData = clientSocket.recv(1024).decode('utf-8')
+            
+            # if receivedData is empty, it means the client has disconnected
+            if not receivedData:
+                break
+            broadcast(receivedData)
             processData(receivedData)
 
-        except Exception as e:
-            print(f"Error handling client {clientSocket}: {e}")
-            clients.remove(clientSocket)
-            clientSocket.close()
-            break
+        except socket.timeout:
+            continue
 
 def clientUpdate():
-    while True:
+    global runThreads
+    while runThreads:
         try:
             receivedData = clientSocket.recv(1024).decode('utf-8')
+            if not receivedData:
+                break
             processData(receivedData)
 
         except Exception as e:
             print(f"Error updating client: {e}")
             clientSocket.close()
             break
-    
 
 isServer = False
 serverSocket = None
 clientSocket = None
 
-# Starts server if not already started and clients join if a host exists
+# Starts server if not already started
 try:
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    serverSocket.bind(('0.0.0.0', 12345))
+    serverSocket.bind((SERVER_IP, PORT))
     print("Server is waiting for connections...")
     serverSocket.listen()
     isServer = True
+# clients join if a host already exists
 except:
     clientSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    clientSocket.connect(('localhost', 12345))
+    clientSocket.connect((SERVER_IP, PORT))
     print("connected to server")
 
 # Server sets a listening thread for each client (player) connected
@@ -106,16 +140,17 @@ if (isServer):
             break
         else:
             print("Please enter a positive integer between 1 and 5")
-    while len(clients) < playerCount - 1:
+    while len(sockets) < playerCount - 1:
         clientSocket, address = serverSocket.accept()
 
-        colorData = json.dumps({"type": "setColor", "color": PLAYER_COLORS[len(clients)]})
+        colorData = json.dumps({"type": "setColor", "color": PLAYER_COLORS[len(sockets)]})
         clientSocket.send(colorData.encode("utf-8"))
 
-        clients.append(clientSocket)
-        client_thread = threading.Thread(target=clientHandler, args=(clientSocket,))
-        client_thread.start()
-        print(f"Connection {len(clients)} established")
+        sockets.append(clientSocket)
+        clientThread = threading.Thread(target=clientHandler, args=(clientSocket,))
+        activeThreads.append(clientThread)
+        clientThread.start()
+        print(f"Connection {len(sockets)} established")
     print("all connections established")
 
 # Client sets a thread listening to the server host for updates
@@ -130,7 +165,9 @@ else:
     print("Playing as color: ", playerColor)
 
     updateClientThread = threading.Thread(target=clientUpdate)
+    activeThreads.append(updateClientThread)
     updateClientThread.start()
+    
 
 pygame.init()
 
@@ -177,8 +214,10 @@ while running:
             
             # Calculate the percentage of the cell that is colored
             cellSurface = pygame.Surface((CELL_SIZE, CELL_SIZE))
-            cell_rect = pygame.Rect(currentCell[0]*CELL_SIZE, currentCell[1]*CELL_SIZE, CELL_SIZE, CELL_SIZE)
-            cellSurface.blit(drawingSurface, (0, 0), area=cell_rect)
+            left = currentCell[0]*CELL_SIZE
+            top = currentCell[1]*CELL_SIZE
+            cellBox = pygame.Rect(left, top, CELL_SIZE, CELL_SIZE)
+            cellSurface.blit(drawingSurface, (0, 0), area=cellBox)
             coloredPixels = pygame.mask.from_threshold(cellSurface, playerColor, (10,10,10)).count()
             totalPixels = CELL_SIZE * CELL_SIZE
 
@@ -192,10 +231,8 @@ while running:
 
                 if (isServer):
                     broadcast(jsonFillData)
-                    # broadcast(jsonLockData)
                 else:
                     clientSocket.send(jsonFillData.encode('utf-8'))
-                    # clientSocket.send(jsonLockData.encode('utf-8'))
 
             elif gridLocks[currentCell[1]][currentCell[0]] != 1:
                 gridLocks[currentCell[1]][currentCell[0]] = None
@@ -218,7 +255,30 @@ while running:
 
     pygame.display.flip()
 
-clientSocket.close()
-serverSocket.close()
+    isAllFilled = all(cell == 1 for row in gridLocks for cell in row)
+
+    if isAllFilled:
+        findWinner()
+        runThreads = False
+        running = False
+        break
+
+# For the server
+if isServer:
+    # And then finally close the sockets:
+    for client in sockets:
+        client.shutdown(socket.SHUT_RDWR)
+        client.close()
+
+# For the client
+else:
+    updateClientThread.join()
+    if clientSocket:
+        clientSocket.close()
+
+# Ensure threads are all joined before exiting program
+runThreads = False
+for thread in activeThreads:
+    thread.join()
 
 pygame.quit()
